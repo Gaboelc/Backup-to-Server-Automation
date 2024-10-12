@@ -4,22 +4,25 @@ import datetime
 import tempfile
 import zipfile
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 
-# Configuraciones iniciales
-source_volume = "A:\\"  # Volumen del que se desea respaldar (puedes cambiarlo)
-destination_path = r"\\GABONET\Gabo\Respaldos"  # Ruta de destino en la red
+source_volume = "A:\\"
+destination_path = r"\\GABONET\Gabo\Respaldos"
 
-# Obtener la fecha y la hora actuales para usar en el nombre del archivo
 current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 backup_filename = f"backup_{current_datetime}.zip"
 backup_filepath = os.path.join(destination_path, backup_filename)
 
+def compress_file(file_path, arcname, temp_zip_path):
+    try:
+        with zipfile.ZipFile(temp_zip_path, 'a', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(file_path, arcname)
+    except PermissionError as e:
+        return f"Error de permiso al acceder al archivo {file_path}: {e}"
+    return None
+
 def compress_folders(source, output_file):
-    """
-    Comprime todas las carpetas del volumen especificado y crea un archivo ZIP.
-    :param source: Volumen o carpeta a comprimir.
-    :param output_file: Ruta completa del archivo ZIP de salida.
-    """
     print(f"Comprimiendo las carpetas de {source} en {output_file}...")
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_zip_path = os.path.join(temp_dir, "backup_temp.zip")
@@ -32,17 +35,18 @@ def compress_folders(source, output_file):
                 else:
                     print(f"Saltando archivo sin permiso: {file_path}")
 
-        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for file_path, arcname in tqdm(files_to_compress, desc="Comprimiendo archivos", unit="archivo"):
-                try:
-                    zipf.write(file_path, arcname)
-                except PermissionError as e:
-                    print(f"Error de permiso al acceder al archivo {file_path}: {e}")
+        print("Cantidad de nucleos disponibles para compresion: ", multiprocessing.cpu_count())
+        with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+            futures = [executor.submit(compress_file, file_path, arcname, temp_zip_path) for file_path, arcname in files_to_compress]
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Comprimiendo archivos", unit="archivo"):
+                error = future.result()
+                if error:
+                    print(error)
+
         shutil.move(temp_zip_path, output_file)
     print("Compresión completada.")
 
 def main():
-    # Crear el respaldo comprimido
     compress_folders(source_volume, backup_filepath)
     print(f"Respaldo creado exitosamente en: {backup_filepath}")
 
